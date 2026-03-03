@@ -1,0 +1,1 @@
+from attack.regeneration import regeneration_attack

@@ -1,0 +1,11 @@
+torch>=2.1
+diffusers>=0.28
+transformers
+accelerate
+safetensors
+Pillow
+scikit-image
+scipy
+matplotlib
+pandas
+pytest
