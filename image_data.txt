@@ -1,0 +1,36 @@
+OCR-Quality HuggingFace Dataset
+================================
+URL: https://huggingface.co/datasets/Aslan-mingye/OCR-Quality
+
+Size:  ~1.2 GB
+Count: 1,000 document images (PNG, 300 DPI, converted from PDF)
+Format: Single Parquet file with embedded images
+
+Columns:
+  - index        (int)    Sample ID (0-999)
+  - human_score  (int)    Quality score 1-4 (1=Excellent, 2=Good, 3=Fair, 4=Poor)
+  - ocr_text     (str)    OCR text extracted by Qwen2.5-VL-72B
+  - source       (str)    Document source/category
+  - image        (bytes)  Embedded PNG image data
+  - image_width  (int)    Width in pixels
+  - image_height (int)    Height in pixels
+
+Download & Extract PNGs:
+  from datasets import load_dataset
+  from pathlib import Path
+
+  ds = load_dataset("Aslan-mingye/OCR-Quality", split="train")
+  out = Path("ocr_quality_pngs")
+  out.mkdir(exist_ok=True)
+  for row in ds:
+      row["image"].save(out / f"{row['index']:04d}.png")
+
+Alternative (pandas):
+  import pandas as pd
+  df = pd.read_parquet("hf://datasets/Aslan-mingye/OCR-Quality/OCR-Quality.parquet")
+
+Notes:
+  - Save to external drive (local disk too small)
+  - Images are academic papers, textbooks, e-books, multilingual docs
+  - Human quality annotations useful for correlating watermark impact
+  - PNG format = no JPEG artifacts = clean baseline for watermark evaluation
