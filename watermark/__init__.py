@@ -8,3 +8,17 @@ from watermark.stable_signature import (
     SS_DEFAULT_KEY,
 )
 from watermark.detection_ss import detect_ss, load_extractor
+
+from watermark.videoseal_wm import (
+    load_videoseal_model,
+    embed_videoseal,
+    detect_videoseal,
+    generate_message,
+)
+from watermark.adapters import (
+    WatermarkAdapter,
+    TreeRingAdapter,
+    StableSignatureAdapter,
+    VideoSealAdapter,
+    create_adapter,
+)

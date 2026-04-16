@@ -10,3 +10,5 @@ scipy
 matplotlib
 pandas
 pytest
+videoseal
+python-dotenv

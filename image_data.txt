@@ -1,36 +1,37 @@
-OCR-Quality HuggingFace Dataset
-================================
-URL: https://huggingface.co/datasets/Aslan-mingye/OCR-Quality
+Image Datasets for Watermark Attack Evaluation
+================================================
 
-Size:  ~1.2 GB
-Count: 1,000 document images (PNG, 300 DPI, converted from PDF)
-Format: Single Parquet file with embedded images
+Location: /Volumes/One Touch/diffusion-watermarking/datasets/
+Download: python scripts/download_datasets.py
 
-Columns:
-  - index        (int)    Sample ID (0-999)
-  - human_score  (int)    Quality score 1-4 (1=Excellent, 2=Good, 3=Fair, 4=Poor)
-  - ocr_text     (str)    OCR text extracted by Qwen2.5-VL-72B
-  - source       (str)    Document source/category
-  - image        (bytes)  Embedded PNG image data
-  - image_width  (int)    Width in pixels
-  - image_height (int)    Height in pixels
+## DIV2K — Natural Photos (control domain)
 
-Download & Extract PNGs:
-  from datasets import load_dataset
-  from pathlib import Path
+Source: https://data.vision.ee.ethz.ch/cvl/DIV2K/
+Count:  900 images (800 train + 100 validation)
+Size:   ~3.3 GB
+Format: PNG, ~2K resolution (various aspect ratios)
+Content: High-res natural photos (people, landscapes, architecture, etc.)
+Purpose: Out-of-distribution control — tests if attack params generalise
+         beyond AI-generated content.
 
-  ds = load_dataset("Aslan-mingye/OCR-Quality", split="train")
-  out = Path("ocr_quality_pngs")
-  out.mkdir(exist_ok=True)
-  for row in ds:
-      row["image"].save(out / f"{row['index']:04d}.png")
+## DiffusionDB — SD-Generated Images (target domain)
 
-Alternative (pandas):
-  import pandas as pd
-  df = pd.read_parquet("hf://datasets/Aslan-mingye/OCR-Quality/OCR-Quality.parquet")
+Source: https://huggingface.co/datasets/poloclub/diffusiondb (random_1k subset)
+Count:  1,000 images
+Size:   ~0.5 GB
+Format: PNG, 512x512
+Content: Stable Diffusion 1.x outputs with diverse prompts
+Purpose: Closest proxy for SynthID's target domain (AI-generated images).
+         Attack params optimised here are most likely to transfer.
 
-Notes:
-  - Save to external drive (local disk too small)
-  - Images are academic papers, textbooks, e-books, multilingual docs
-  - Human quality annotations useful for correlating watermark impact
-  - PNG format = no JPEG artifacts = clean baseline for watermark evaluation
+## Domain Comparison
+
+Results are split by dataset to answer: "Do optimal attack parameters
+differ between natural photos and AI-generated images?"
+If they converge → high confidence the attack generalises to SynthID.
+If they diverge → need domain-specific attack tuning.
+
+## Previous Dataset (deleted)
+
+OCR-Quality (Aslan-mingye/OCR-Quality) — 1,000 document scans.
+Removed because document pages are a poor proxy for AI-generated images.

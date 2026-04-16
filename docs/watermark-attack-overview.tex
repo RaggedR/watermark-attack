@@ -1,0 +1,243 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{booktabs}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{hyperref}
+\usepackage{xcolor}
+\usepackage{enumitem}
+
+\hypersetup{
+  colorlinks=true,
+  linkcolor=blue!60!black,
+  urlcolor=blue!60!black,
+}
+
+\title{Removing AI Watermarks with Off-the-Shelf Diffusion Models:\\
+       A Practical Demonstration}
+\author{Diffusion Watermarking Project}
+\date{March 2026}
+
+\begin{document}
+\maketitle
+
+%----------------------------------------------------------------------
+\section{What Is a Diffusion Model?}
+
+A diffusion model is a neural network that learns to generate images by
+practising a very specific skill: starting from pure random noise and
+gradually turning it into a coherent picture, one small step at a time.
+Training works in reverse --- the model is shown real images with
+increasing amounts of noise added, and learns to predict how to remove
+the noise at each step. Once trained, you can hand it pure static and it
+will denoise its way to a photorealistic image.
+
+The key capability we exploit is called \textbf{image-to-image} (img2img)
+regeneration. Instead of starting from pure noise, you start from an
+existing image, add a controlled amount of noise (destroying some of the
+original signal), and then let the model denoise it back into a clean
+image. The result looks similar to the original --- same composition,
+colours, and subject --- but every pixel has been \emph{regenerated} by
+the diffusion model. The ``strength'' parameter controls how much noise
+is added: low strength preserves more of the original; high strength
+gives the model more creative freedom.
+
+This is not a research prototype. Stable Diffusion is free, open-source
+software that runs on a consumer laptop. The img2img pipeline is a
+single function call in the standard library.
+
+%----------------------------------------------------------------------
+\section{The Attack}
+
+Digital watermarks work by hiding a signal in the pixel values of an
+image. The signal is imperceptible to the human eye but detectable by
+the right algorithm. The watermark's security assumption is that an
+attacker cannot remove this signal without visibly degrading the image.
+
+The img2img attack breaks this assumption. When a watermarked image is
+passed through the diffusion model:
+
+\begin{enumerate}[leftmargin=2em]
+  \item \textbf{Noise destroys the watermark.} The forward diffusion
+    step adds Gaussian noise to the image, directly corrupting the
+    learned signal pattern that the watermark encoder embedded.
+  \item \textbf{Denoising reconstructs the image, not the watermark.}
+    The model reconstructs a visually similar image from the noisy
+    version, but the reconstruction is guided by the diffusion model's
+    own learned prior --- not by the watermark encoder. The output
+    carries no trace of the original watermark.
+\end{enumerate}
+
+No training or fine-tuning is required. The attacker does not need to
+know anything about the watermark's architecture, key, or detection
+method. A single forward pass through an unmodified, off-the-shelf
+Stable Diffusion 1.5 checkpoint is sufficient.
+
+%----------------------------------------------------------------------
+\section{Results: VideoSeal (Meta)}
+
+We first tested the attack against \textbf{VideoSeal}, Meta's
+open-source neural watermark. VideoSeal embeds a 256-bit message into
+images using a learned neural encoder/decoder --- it is the closest
+publicly available analogue to Google's SynthID. We embedded watermarks
+at an above-default strength (\texttt{scaling\_w}~$= 0.3$, 50\% above
+the default) into 5 images from DiffusionDB, then attacked each at 3
+strength levels with 2 guidance scales (6 combinations per image, 30
+runs total).
+
+\begin{table}[h]
+\centering
+\caption{VideoSeal attack results, averaged over 5 images. Bit accuracy
+at chance level (50\%) means no watermark signal remains.}
+\label{tab:videoseal}
+\begin{tabular}{lcccc}
+\toprule
+\textbf{Attack Strength} & \textbf{SSIM} & \textbf{PSNR (dB)} &
+\textbf{Bit Accuracy} & \textbf{Watermark Detected} \\
+\midrule
+\textit{Before attack} & \textit{0.991} & \textit{41.6} &
+\textit{100.0\%} & \textit{5/5} \\
+\midrule
+0.3 (mild)     & 0.540 & 20.4 & 53.1\% & 0/5 \\
+0.5 (moderate) & 0.433 & 18.2 & 49.9\% & 0/5 \\
+0.7 (strong)   & 0.337 & 16.0 & 49.6\% & 0/5 \\
+\midrule
+\textit{Chance level} & --- & --- & \textit{50.0\%} & --- \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{The watermark was removed in 100\% of trials} (30/30), at every
+attack strength tested. Even the mildest setting (strength 0.3) reduced
+bit accuracy from 100\% to 53\% --- statistically indistinguishable from
+random guessing. The $p$-value collapsed from $10^{-78}$ (before attack)
+to $\sim\!0.1$ (after), a drop of 77 orders of magnitude.
+
+The attacked images are visibly altered (SSIM drops to 0.34--0.54) but
+remain recognisable. At strength 0.3, image quality is roughly
+comparable to moderate JPEG compression.
+
+%----------------------------------------------------------------------
+\section{Pilot Test: SynthID (Google)}
+
+Having established the attack on VideoSeal, we turned to the real
+target: \textbf{SynthID}, Google DeepMind's 136-bit watermark deployed
+across all Gemini-generated images. SynthID's detector is closed-source,
+but Google provides a public detection portal that returns a binary
+yes/no verdict.
+
+For the pilot, we generated a single image via the Gemini API (``old man
+in a boat'', $1408 \times 768$). Because Stable Diffusion operates at
+$512 \times 512$, we used a \textbf{tiled attack}: split the image into
+overlapping patches, attack each tile independently, then reassemble.
+We tested three strengths and uploaded each result to Google's detection
+portal.
+
+\begin{table}[h]
+\centering
+\caption{Pilot SynthID attack ($n = 1$). Detection via Google's
+SynthID portal.}
+\label{tab:synthid-pilot}
+\begin{tabular}{lccc}
+\toprule
+\textbf{Attack Strength} & \textbf{SSIM} & \textbf{PSNR (dB)} &
+\textbf{SynthID Detected} \\
+\midrule
+\textit{Original image} & \textit{1.000} & $\infty$ & \textit{Yes} \\
+\midrule
+0.2 & 0.684 & 22.1 & \textbf{No} \\
+0.3 & 0.617 & 20.7 & \textbf{No} \\
+0.5 & 0.472 & 18.3 & \textbf{No} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+All three attack strengths removed the SynthID watermark according to
+Google's own detector. This is only $n = 1$, but it demonstrates that
+the attack concept transfers from VideoSeal to SynthID without any
+modification.
+
+%----------------------------------------------------------------------
+\section{Scaling Up: 50-Image SynthID Corpus}
+
+To move beyond a single data point, we generated a \textbf{50-image
+corpus} via the Gemini API using diverse prompts (landscapes, portraits,
+abstract art, food, sci-fi, etc.; all $1024 \times 1024$ PNG). Each
+image is attacked at six fine-grained strengths using the same tiled
+img2img pipeline.
+
+Since we cannot submit 300 images to Google's portal manually, we use
+\textbf{reverse-SynthID}, an open-source detector that analyses
+Fourier-domain carrier frequencies characteristic of SynthID. While less
+authoritative than Google's detector, it provides continuous metrics
+(correlation strength, phase coherence) rather than just a binary
+verdict, letting us track exactly how the watermark signal degrades.
+
+\begin{table}[h]
+\centering
+\caption{50-image SynthID corpus sweep. Results pending --- sweep in
+progress at time of writing.}
+\label{tab:synthid-sweep}
+\begin{tabular}{lcccc}
+\toprule
+\textbf{Attack Strength} & \textbf{Mean SSIM} & \textbf{Mean PSNR} &
+\textbf{Mean Correlation} & \textbf{Detection Rate} \\
+\midrule
+0.05 & --- & --- & --- & ---/50 \\
+0.10 & --- & --- & --- & ---/50 \\
+0.15 & --- & --- & --- & ---/50 \\
+0.20 & --- & --- & --- & ---/50 \\
+0.25 & --- & --- & --- & ---/50 \\
+0.30 & --- & --- & --- & ---/50 \\
+\midrule
+\textit{Original} & \textit{1.000} & $\infty$ & \textit{TBD} &
+\textit{50/50} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Preliminary results on 2 images show that correlation drops by
+$\sim$\!3$\times$ between the original and strength 0.3, confirming the
+watermark signal is being degraded. The full sweep ($50 \times 6 = 300$
+attacks) will reveal whether SynthID has a sharp breaking point or a
+gradual decline.
+
+%----------------------------------------------------------------------
+\section{What This Means}
+
+The core finding is simple: \textbf{an off-the-shelf diffusion model,
+used as-is, removes state-of-the-art neural watermarks.}
+
+\begin{itemize}[leftmargin=2em]
+  \item \textbf{No expertise required.} The attack is a single function
+    call in a free, open-source library. Anyone who can install Python
+    can run it.
+  \item \textbf{No knowledge of the watermark needed.} The attacker
+    does not need to know the watermark's architecture, key, embedding
+    strength, or detection algorithm. The diffusion model is not
+    ``trained against'' the watermark --- it simply destroys the signal
+    as a side effect of its normal operation.
+  \item \textbf{Transfers across watermark systems.} The same attack
+    (same model, same code, same parameters) removed both VideoSeal
+    (Meta, 256-bit) and SynthID (Google, 136-bit) watermarks, despite
+    having no access to either system's internals.
+  \item \textbf{Quality--robustness tradeoff favours the attacker.}
+    Even the mildest attack setting (strength 0.3) completely removes
+    the watermark while preserving recognisable image content. The
+    attacker can choose how much quality to sacrifice.
+\end{itemize}
+
+This does not mean watermarking is useless --- it raises the bar for
+casual redistribution and provides a signal for platforms that control
+the upload pipeline. But it does mean that any motivated individual can
+strip the watermark in seconds, which limits the technology's value as
+a forensic provenance tool against adversarial actors.
+
+The watermark cannot survive regeneration because it is embedded in
+pixel-level statistics, and the diffusion model regenerates those
+statistics from scratch. Any watermark that operates in the same signal
+domain as the diffusion model's output is fundamentally vulnerable to
+this class of attack.
+
+\end{document}

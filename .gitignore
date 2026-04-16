@@ -3,6 +3,9 @@
 images/
 results/
 
+# VideoSeal model cache (downloaded on first use)
+ckpts/
+
 # Python
 __pycache__/
 *.pyc
@@ -24,9 +27,23 @@ venv/
 .DS_Store
 Thumbs.db
 
+# External repos (cloned dependencies)
+reverse-SynthID/
+
 # Test cache
 .pytest_cache/
 
 # Env
 .env
 /tmp/
+
+# SynthID test corpus (116MB binary images)
+test-synthID/
+
+# LaTeX build artifacts
+docs/*.aux
+docs/*.log
+docs/*.out
+
+# Superseded planning docs
+CLAUDE_DOCS/

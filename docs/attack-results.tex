@@ -1,0 +1,619 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{graphicx}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{hyperref}
+\usepackage{xcolor}
+\usepackage{caption}
+\usepackage{subcaption}
+\usepackage{siunitx}
+\usepackage{multirow}
+
+\sisetup{
+  round-mode=places,
+  round-precision=2,
+  scientific-notation=true,
+  exponent-product=\times,
+}
+
+\title{Img2Img Regeneration Attack on Neural Image Watermarks:\\
+       From VideoSeal to SynthID}
+\author{Diffusion Watermarking Project}
+\date{March 2026}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+We evaluate the robustness of neural image watermarks against a Stable
+Diffusion img2img regeneration attack. \textbf{No training or fine-tuning
+is involved:} the attack uses an unmodified, off-the-shelf Stable Diffusion
+1.5 checkpoint --- a single forward pass through the img2img pipeline is
+sufficient. A coarse grid search against Meta's \textbf{VideoSeal}
+(256-bit, open-source) shows the watermark is \textbf{removed in 100\% of
+trials} (30/30) at all tested strengths ($0.3$--$0.7$), establishing that
+even moderate img2img regeneration destroys the watermark signal. We then
+scale the evaluation to Google's \textbf{SynthID} (136-bit, closed-source):
+a pilot test verified via Google's detection portal showed removal at
+strength~$= 0.2$; we now have a \textbf{50-image SynthID corpus} generated
+via the Gemini API with automated detection via the
+reverse-SynthID~\cite{reversesynthid} open-source detector. Preliminary
+results on 2 images show that while the watermark signal degrades
+monotonically with attack strength (Fourier-domain correlation drops
+$\sim$\!3$\times$ from original to $s = 0.3$), the detector's binary
+decision remains positive, suggesting SynthID may be more robust than
+VideoSeal or that higher attack strengths are needed. A full 50-image sweep
+at six fine-grained strengths ($0.05$--$0.30$) is in progress. The attack
+requires no knowledge of the watermark's architecture or parameters.
+\end{abstract}
+
+%----------------------------------------------------------------------
+\section{Introduction}
+\label{sec:intro}
+
+Image watermarking is increasingly deployed to identify AI-generated
+content. Google's SynthID~\cite{synthid} embeds a 136-bit neural watermark
+at generation time, but its detection model is closed-source. To study
+watermark robustness against diffusion-based attacks without access to
+SynthID, we use open-source proxies.
+
+\textbf{VideoSeal}~\cite{videoseal} (Meta FAIR, 2024) is the closest
+open-source analogue to SynthID: both use learned neural
+encoder/decoders operating post-hoc on images, both embed multi-bit
+payloads (256 bits for VideoSeal, 136 for SynthID), and both are designed
+for imperceptible embedding.
+
+Our attack is deliberately minimal: pass the watermarked image through an
+\textbf{unmodified, pretrained} Stable Diffusion img2img pipeline. No
+training, fine-tuning, or adversarial optimisation is performed. The
+diffusion model is used purely for inference --- a single img2img call
+that adds noise (destroying the watermark's learned signal) then denoises
+(reconstructing a visually similar image). The attacker needs no knowledge
+of the watermark's architecture, weights, or detection threshold.
+
+We use a coarse grid search over attack strength and guidance scale to
+characterise the quality--robustness tradeoff, not to ``tune'' the attack:
+VideoSeal fails at every tested setting. We then scale to SynthID with a
+50-image Gemini-generated corpus and automated detection via
+reverse-SynthID. The key open question is \emph{what is the minimum attack
+strength that reliably removes each watermark} --- answering this for
+SynthID requires the fine-grained sweep now in progress.
+
+%----------------------------------------------------------------------
+\section{Experimental Setup}
+\label{sec:setup}
+
+\subsection{Watermark Configuration}
+
+We use the \texttt{videoseal\_1.0} model (checkpoint
+\texttt{y\_256b\_img.pth}, 228~MB). The embedder operates in YUV colour
+space with a UNet-based architecture; the extractor is a ConvNeXt-Tiny
+producing 257 outputs (1 presence indicator + 256 message bit logits).
+
+\begin{itemize}
+    \item \textbf{Message:} Deterministic 256-bit pseudorandom sequence
+    (seed~$= 42$), with 126 ones and 130 zeros.
+    \item \textbf{Embedding strength:} \texttt{scaling\_w} $= 0.3$
+    (50\% above the default 0.2).
+    \item \textbf{Detection threshold:} $p < 0.01$ via one-sided binomial
+    test on bit matches.
+\end{itemize}
+
+\subsection{Test Images}
+
+Five images from DiffusionDB~\cite{diffusiondb} (Stable
+Diffusion--generated, $512 \times 512$ PNG), the target domain for
+AI-generated content watermarking.
+
+\subsection{Attack Model}
+
+Stable Diffusion v1.5~\cite{sd15} with DDIM scheduler, loaded in
+\texttt{float32} on Apple MPS with attention slicing enabled. The attack
+wraps the pipeline as \texttt{StableDiffusionImg2ImgPipeline} and applies
+regeneration at varying strength.
+
+\textbf{Note:} The original plan used SD~2.1 ($768 \times 768$), but
+Stability AI removed it from HuggingFace (EU AI Act compliance) and it
+was prohibitively slow on MPS ($\sim$17~min/step). SD~1.5 at $512 \times
+512$ runs at $\sim$2~steps/s --- a $\sim$\!1000$\times$ speedup. Since
+the attack model is purely a ``weapon'' (independent of the watermark
+method), any capable diffusion model suffices.
+
+\subsection{Grid Search Parameters}
+
+\begin{table}[h]
+\centering
+\caption{Attack hyperparameter grid.}
+\label{tab:grid}
+\begin{tabular}{lll}
+\toprule
+\textbf{Parameter} & \textbf{Values} & \textbf{Description} \\
+\midrule
+Attack strength & $\{0.3, 0.5, 0.7\}$ & Fraction of diffusion steps applied \\
+Guidance scale  & $\{1.0, 7.5\}$       & Classifier-free guidance weight \\
+Inference steps & $50$                  & Total DDIM steps \\
+Seed            & $42$                  & Random seed for reproducibility \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Total: 6 parameter combinations $\times$ 5 images $= 30$ runs.
+
+%----------------------------------------------------------------------
+\section{Baseline: Pre-Attack Performance}
+\label{sec:baseline}
+
+Before attacking, we verify that the watermark embeds and detects
+correctly at \texttt{scaling\_w}~$= 0.3$.
+
+\begin{table}[h]
+\centering
+\caption{Pre-attack watermark performance (\texttt{scaling\_w}~$= 0.3$).}
+\label{tab:baseline}
+\begin{tabular}{lccccc}
+\toprule
+& \textbf{SSIM} & \textbf{PSNR (dB)} & \textbf{Bit Acc.} & \textbf{$p$-value} & \textbf{Detected} \\
+\midrule
+\multicolumn{6}{l}{\textit{Watermarked images (true positives)}} \\
+Average (5 images) & 0.9907 & 41.6 & 100.0\% & $8.6 \times 10^{-78}$ & 5/5 \\
+\midrule
+\multicolumn{6}{l}{\textit{Clean images (false positives)}} \\
+DiffusionDB (5 images) & --- & --- & 51.8\% & $\sim 0.3$ & 0/5 \\
+DIV2K (5 images)       & --- & --- & 50.8\% & $\sim 0.5$ & 0/5 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The watermark is effectively invisible (SSIM $> 0.99$, PSNR $> 40$~dB)
+and detection is perfect with a $p$-value gap of $\sim$\!76 orders of
+magnitude between watermarked and clean images.
+
+%----------------------------------------------------------------------
+\section{Attack Results}
+\label{sec:results}
+
+\subsection{Full Results}
+
+Table~\ref{tab:full} shows all 30 runs. Every single configuration
+successfully removed the watermark (detected~$=$~False).
+
+\begin{table}[h]
+\centering
+\caption{Full attack sweep results. All 30 runs: watermark \textbf{not detected}.}
+\label{tab:full}
+\small
+\begin{tabular}{cccccrrc}
+\toprule
+\textbf{Atk str.} & \textbf{CFG} & \textbf{Image} & \textbf{SSIM} & \textbf{PSNR} & \textbf{$p$-value} & \textbf{Bit Acc.} & \textbf{Det.} \\
+\midrule
+\multirow{5}{*}{0.3} & \multirow{5}{*}{1.0}
+& 0000 & 0.363 & 18.3 & $1.2 \times 10^{-1}$ & 53.9\% & No \\
+&& 0001 & 0.538 & 18.3 & $1.7 \times 10^{-1}$ & 53.1\% & No \\
+&& 0002 & 0.552 & 19.2 & $2.9 \times 10^{-1}$ & 52.0\% & No \\
+&& 0003 & 0.686 & 22.8 & $9.5 \times 10^{-2}$ & 54.3\% & No \\
+&& 0004 & 0.559 & 23.5 & $1.7 \times 10^{-1}$ & 53.1\% & No \\
+\midrule
+\multirow{5}{*}{0.5} & \multirow{5}{*}{1.0}
+& 0000 & 0.250 & 16.4 & $1.2 \times 10^{-1}$ & 53.9\% & No \\
+&& 0001 & 0.390 & 15.2 & $6.7 \times 10^{-1}$ & 48.8\% & No \\
+&& 0002 & 0.467 & 17.4 & $8.6 \times 10^{-1}$ & 46.9\% & No \\
+&& 0003 & 0.604 & 20.4 & $3.3 \times 10^{-1}$ & 51.6\% & No \\
+&& 0004 & 0.454 & 21.7 & $7.1 \times 10^{-1}$ & 48.4\% & No \\
+\midrule
+\multirow{5}{*}{0.7} & \multirow{5}{*}{1.0}
+& 0000 & 0.186 & 15.2 & $9.1 \times 10^{-1}$ & 46.1\% & No \\
+&& 0001 & 0.254 & 12.3 & $6.7 \times 10^{-1}$ & 48.8\% & No \\
+&& 0002 & 0.365 & 15.4 & $7.5 \times 10^{-1}$ & 48.1\% & No \\
+&& 0003 & 0.521 & 17.6 & $7.5 \times 10^{-2}$ & 54.7\% & No \\
+&& 0004 & 0.360 & 19.4 & $4.8 \times 10^{-1}$ & 50.4\% & No \\
+\bottomrule
+\end{tabular}
+\vspace{0.5em}
+
+{\footnotesize Results for CFG~$= 7.5$ omitted from this table: they are
+\textbf{identical} to CFG~$= 1.0$ in every metric (see Section~\ref{sec:guidance}).}
+\end{table}
+
+\subsection{Aggregated by Attack Strength}
+
+Table~\ref{tab:summary} shows the mean metrics across all 5 images for
+each attack strength (pooling over both guidance scales, which are
+identical).
+
+\begin{table}[h]
+\centering
+\caption{Mean attack metrics by strength (averaged over 5 images).}
+\label{tab:summary}
+\begin{tabular}{lccccc}
+\toprule
+\textbf{Atk str.} & \textbf{SSIM} & \textbf{PSNR (dB)} & \textbf{Bit Acc.} & \textbf{Detected} & \textbf{Time (s/img)} \\
+\midrule
+0.3 & 0.540 & 20.4 & 53.1\% & 0/5 & 10.1 \\
+0.5 & 0.433 & 18.2 & 49.9\% & 0/5 & 18.0 \\
+0.7 & 0.337 & 16.0 & 49.6\% & 0/5 & 28.3 \\
+\midrule
+\textit{Chance level} & --- & --- & \textit{50.0\%} & --- & --- \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Guidance Scale Has No Effect}
+\label{sec:guidance}
+
+A surprising finding: classifier-free guidance scale (CFG) has
+\textbf{zero effect} on attack efficacy. For every (image, strength) pair,
+the SSIM, PSNR, $p$-value, and bit accuracy are identical between
+CFG~$= 1.0$ and CFG~$= 7.5$.
+
+This makes physical sense: the img2img attack uses an empty prompt.
+Classifier-free guidance interpolates between unconditional and
+conditional predictions, but with an empty prompt both predictions are
+identical, so the guidance scale is a no-op.
+
+\textbf{Implication:} Future sweeps can fix CFG~$= 1.0$ and focus
+the parameter budget on finer strength granularity.
+
+%----------------------------------------------------------------------
+\section{Analysis}
+\label{sec:analysis}
+
+\subsection{Watermark Removal is Trivially Easy}
+
+The watermark was removed in \textbf{100\% of trials} (30/30) at all
+tested attack strengths ($0.3$--$0.7$). Post-attack bit accuracy is
+indistinguishable from chance (50\%), with $p$-values of $\mathcal{O}(10^{-1})$
+compared to $\mathcal{O}(10^{-78})$ pre-attack --- a collapse of
+$\sim$\!77 orders of magnitude.
+
+\subsection{Optimal Operating Point}
+
+The Pareto frontier is straightforward. Attack strength $= 0.3$ is the
+clear winner:
+
+\begin{itemize}
+    \item \textbf{Quality:} SSIM~$\approx 0.54$, PSNR~$\approx 20$~dB
+    (moderate degradation but images remain recognisable).
+    \item \textbf{Efficacy:} Bit accuracy drops to 53\% (only 3
+    percentage points above chance, well within the noise floor).
+    \item \textbf{Speed:} $\sim$\!10~s per image on Apple MPS.
+\end{itemize}
+
+Stronger attacks (0.5, 0.7) destroy more image quality without
+meaningfully improving watermark removal --- the watermark is already gone
+at 0.3.
+
+\subsection{Why the Attack Works}
+
+The img2img regeneration attack succeeds because:
+
+\begin{enumerate}
+    \item \textbf{Information destruction:} The forward diffusion process
+    (adding noise proportional to the strength parameter) directly
+    destroys the learned watermark signal embedded in pixel-space
+    activations.
+    \item \textbf{Signal reconstruction:} The reverse diffusion process
+    (denoising) reconstructs a plausible image from the noised latent,
+    but the reconstructed image carries the \emph{diffusion model's}
+    implicit prior rather than the watermark encoder's signal.
+    \item \textbf{Dimensional mismatch:} VideoSeal embeds information in
+    a 256-dimensional binary code. The diffusion process operates in a
+    much higher-dimensional latent space ($4 \times 64 \times 64 =
+    16{,}384$ dimensions for SD~1.5), and even 30\% noise injection
+    perturbs enough dimensions to destroy the watermark's statistical
+    signature.
+\end{enumerate}
+
+%----------------------------------------------------------------------
+\section{Transfer to SynthID}
+\label{sec:synthid}
+
+Having tuned attack parameters on VideoSeal, we apply the same img2img
+regeneration attack to \textbf{SynthID-watermarked images} generated by
+Google Gemini (Imagen~3). SynthID is Google's closed-source 136-bit neural
+watermark, deployed in production across Gemini-generated images.
+
+\subsection{Pilot: Single Image via Google's Portal}
+\label{sec:synthid-pilot}
+
+The initial test used a single image (``old man in a boat'', $1408 \times
+768$) generated via the Gemini API, with detection verified through
+Google's public SynthID detection portal (binary verdict only).
+
+Because SD~1.5 operates natively at $512 \times 512$, we use a
+\textbf{tiled attack}: the image is split into overlapping $512 \times 512$
+patches, each attacked independently, then reassembled with linear
+feathering. Prior to attack, the visible Gemini badge was removed via
+OpenCV inpainting and non-essential PNG chunks were stripped.
+
+\begin{table}[h]
+\centering
+\caption{Pilot SynthID attack ($n = 1$, $1408 \times 768$, tiled at $512
+\times 512$). Detection via Google's portal.}
+\label{tab:synthid-pilot}
+\begin{tabular}{lccl}
+\toprule
+\textbf{Atk str.} & \textbf{SSIM} & \textbf{PSNR (dB)} & \textbf{SynthID Detected} \\
+\midrule
+0.2 & 0.684 & 22.1 & \textbf{No} \\
+0.3 & 0.617 & 20.7 & \textbf{No} \\
+0.5 & 0.472 & 18.3 & \textbf{No} \\
+\midrule
+\textit{Original} & \textit{1.000} & \textit{$\infty$} & \textit{Yes} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+All three strengths removed the watermark according to Google's detector.
+However, this is a single data point and the portal returns only a binary
+verdict with no confidence score.
+
+\subsection{Corpus Evaluation: 50 Images via reverse-SynthID}
+\label{sec:synthid-corpus}
+
+To scale beyond $n = 1$, we generated a \textbf{50-image SynthID corpus}
+via the Gemini API (diverse prompts: landscapes, portraits, abstract art,
+food, sci-fi, etc.; all $1024 \times 1024$ PNG). For automated detection we
+use \textbf{reverse-SynthID}~\cite{reversesynthid}, an open-source detector
+that analyses Fourier-domain carrier frequencies embedded by SynthID.
+
+\subsubsection{Detection Methodology}
+
+Reverse-SynthID extracts a noise residual via multi-denoiser fusion
+(wavelet, bilateral, non-local means, Wiener) and checks for SynthID's
+known carrier frequencies in the Fourier domain. Detection combines four
+signals:
+
+\begin{enumerate}
+    \item \textbf{Correlation} with a reference noise pattern (built from
+    a codebook of watermarked images).
+    \item \textbf{Phase match} at known carrier frequencies (e.g.\
+    $(14,14)$, $(126,14)$, $(128,128)$).
+    \item \textbf{Noise structure ratio} (standard deviation / mean
+    absolute value of the extracted noise).
+    \item \textbf{Multi-scale consistency} across 256, 512, and 1024~px
+    resolutions.
+\end{enumerate}
+
+We built a \textbf{corpus-specific codebook} from all 50 watermarked images
+(correlation mean $= 0.001$, detection threshold $= -0.007$).
+
+\textbf{Detector limitations:} The binary \texttt{is\_watermarked} decision
+has a high false positive rate --- even random noise passes the loose
+threshold. The \emph{continuous metrics} (correlation, phase match) are far
+more informative. We report both but draw conclusions from the continuous
+signals.
+
+\subsubsection{Tiled Attack}
+
+Each $1024 \times 1024$ corpus image is split into a $2 \times 2$ grid of
+non-overlapping $512 \times 512$ tiles (matching SD~1.5's native
+resolution). Each tile is attacked independently via img2img regeneration,
+then reassembled. This yields 4 tile attacks per image.
+
+Attack parameters: guidance scale~$= 1.0$ (irrelevant with empty prompt,
+per Section~\ref{sec:guidance}), 50 DDIM steps, seed~$= 42$.
+
+\subsubsection{Preliminary Results ($n = 2$)}
+
+Table~\ref{tab:synthid-corpus} shows results from a preliminary 2-image
+test at strengths 0.10 and 0.30.
+
+\begin{table}[h]
+\centering
+\caption{SynthID corpus attack (preliminary, $n = 2$). Continuous
+metrics from reverse-SynthID detector.}
+\label{tab:synthid-corpus}
+\small
+\begin{tabular}{clccccc}
+\toprule
+\textbf{Image} & \textbf{Atk str.} & \textbf{SSIM} & \textbf{PSNR} &
+\textbf{Correlation} & \textbf{Phase Match} & \textbf{Confidence} \\
+\midrule
+\multirow{3}{*}{0000} & \textit{Original} & 1.000 & $\infty$ & 0.0645 & 0.677 & 1.000 \\
+& 0.10 & 0.792 & 26.7 & 0.0292 & 0.581 & 1.000 \\
+& 0.30 & 0.732 & 24.5 & 0.0182 & 0.565 & 1.000 \\
+\midrule
+\multirow{3}{*}{0001} & \textit{Original} & 1.000 & $\infty$ & 0.0928 & 0.603 & 1.000 \\
+& 0.10 & 0.604 & 25.2 & 0.0488 & 0.541 & 1.000 \\
+& 0.30 & 0.506 & 22.2 & 0.0309 & 0.569 & 1.000 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Key observations:
+
+\begin{itemize}
+    \item \textbf{Correlation degrades monotonically:} From 0.065 / 0.093
+    (original) to 0.018 / 0.031 at $s = 0.3$ --- a 2--3$\times$ reduction.
+    This confirms the attack is degrading the watermark signal.
+
+    \item \textbf{Phase match degrades:} From 0.68 / 0.60 to 0.57 / 0.57
+    at $s = 0.3$, approaching the detection threshold of 0.45.
+
+    \item \textbf{Binary detector still positive:} At $s = 0.3$, the
+    detector's binary decision remains ``detected'' (confidence = 1.0).
+    However, this is partly due to the detector's loose thresholds ---
+    even random noise produces confidence $\approx 0.79$.
+
+    \item \textbf{SynthID appears more robust than VideoSeal:} VideoSeal's
+    bit accuracy dropped to chance at $s = 0.3$; SynthID's continuous
+    metrics remain well above noise floor. This suggests either (a) SynthID
+    is architecturally more resilient, or (b) the reverse-SynthID detector
+    is less sensitive than VideoSeal's extractor.
+
+    \item \textbf{Higher strengths needed:} The full sweep
+    ($s \in \{0.05, \ldots, 0.30\}$ on all 50 images) will clarify
+    whether SynthID breaks at these strengths or requires $s > 0.3$.
+\end{itemize}
+
+\subsection{Discussion}
+
+The combined evidence from the pilot and corpus evaluations is nuanced:
+
+\begin{enumerate}
+    \item \textbf{Google's portal says removed at $s = 0.2$}
+    (Section~\ref{sec:synthid-pilot}), but Google's detector is a black
+    box --- we cannot distinguish a hard threshold flip from a marginal
+    decision.
+
+    \item \textbf{reverse-SynthID's continuous metrics show clear
+    degradation} but not yet removal at $s = 0.3$. The correlation signal
+    remains $\sim$\!20$\times$ above random noise.
+
+    \item \textbf{The two detectors may have different sensitivities.}
+    Google's production detector (trained on SynthID's exact architecture)
+    is likely more accurate than the open-source reverse-engineering
+    effort. If Google's detector returns ``not detected'' at $s = 0.2$
+    while reverse-SynthID still sees signal at $s = 0.3$, the watermark
+    may be functionally broken even when residual Fourier artifacts remain.
+\end{enumerate}
+
+The resolution: the full 50-image sweep will produce a degradation curve
+that clarifies whether SynthID has a sharp phase transition (like
+VideoSeal) or a gradual decline.
+
+%----------------------------------------------------------------------
+\section{Limitations}
+\label{sec:limitations}
+
+\begin{itemize}
+    \item \textbf{VideoSeal sample size:} Tested on 5 DiffusionDB images
+    only. Full DiffusionDB (1{,}000) and DIV2K (900) sweeps are prepared
+    but not yet run.
+    \item \textbf{SynthID sweep in progress:} Corpus of 50 images is
+    ready; full 6-strength sweep (300 runs) not yet complete. Preliminary
+    results cover only 2 images $\times$ 2 strengths.
+    \item \textbf{Single watermark strength:} Only
+    \texttt{scaling\_w}~$= 0.3$ was attacked for VideoSeal. Higher
+    embedding strengths may be more robust.
+    \item \textbf{SD~1.5 only:} Different attack models (SDXL, SD~3.x,
+    Flux) may have different attack profiles. However, since even the
+    ``weakest'' model trivially removes VideoSeal, stronger models are
+    unlikely to change the qualitative conclusion.
+    \item \textbf{No adaptive defence:} Neither VideoSeal nor SynthID
+    was fine-tuned to resist regeneration attacks. An adversarially
+    trained watermark may fare better.
+    \item \textbf{Quality metrics only:} SSIM and PSNR measure
+    pixel-level similarity but do not capture perceptual or semantic
+    quality. FID or LPIPS would be more informative.
+    \item \textbf{reverse-SynthID detector accuracy:} The open-source
+    detector has a high false positive rate (random noise achieves
+    confidence $\approx 0.79$, phase match $\approx 0.47$). Its binary
+    decision is unreliable; we rely on continuous metrics (correlation,
+    phase match) for quantitative analysis. The discrepancy between
+    Google's portal (which reports removal at $s = 0.2$) and
+    reverse-SynthID (which still detects at $s = 0.3$) is unresolved.
+\end{itemize}
+
+%----------------------------------------------------------------------
+\section{Next Steps}
+\label{sec:next}
+
+\begin{enumerate}
+    \item \textbf{Complete SynthID sweep} (\textit{in progress}): Run the
+    full 50-image $\times$ 6-strength sweep (300 attacks). Infrastructure
+    and corpus are ready; execution takes $\sim$\!5~hours on MPS.
+    \item \textbf{Extend SynthID strength range:} If the watermark
+    survives at $s = 0.30$, extend to
+    $\{0.35, 0.40, 0.50, 0.60, 0.70\}$ to find the breaking point.
+    \item \textbf{Calibrate reverse-SynthID thresholds:} The current
+    detector has a $\sim$\!80\% false positive rate on random noise. Build
+    a calibration set (50 watermarked + 50 clean images) to find a
+    correlation/phase-match threshold with $< 5\%$ FPR.
+    \item \textbf{Scale VideoSeal to full datasets:} Run on all 1{,}000
+    DiffusionDB and 900 DIV2K images with finer strengths.
+    \item \textbf{Multiple watermark methods:} Compare VideoSeal, Stable
+    Signature, and Tree-Ring under the same attack.
+    \item \textbf{Perceptual metrics:} Add LPIPS and FID to the quality
+    evaluation.
+    \item \textbf{Tiling analysis:} Study whether tile boundaries create
+    detectable artefacts that a forensic detector could exploit.
+\end{enumerate}
+
+%----------------------------------------------------------------------
+\section{Reproduction}
+\label{sec:reproduction}
+
+\subsection{VideoSeal Sweep}
+
+\begin{verbatim}
+# Embed watermarks (5 images, scaling_w=0.3)
+python scripts/embed.py --method videoseal \
+  --input-dir "datasets/diffusiondb" \
+  --num-images 5 --strengths 0.3
+
+# Run attack sweep (6 combos x 5 images)
+python scripts/attack_sweep.py --max-images 5
+
+# Results: $DW_RESULTS_DIR/attack_videoseal_diffusiondb_s0.3.csv
+\end{verbatim}
+
+\subsection{SynthID Sweep}
+
+\begin{verbatim}
+# Clone reverse-SynthID detector
+git clone https://github.com/aloshdenny/reverse-SynthID
+pip install PyWavelets scikit-learn tqdm opencv-python
+
+# Build codebook from 50 SynthID corpus images
+python reverse-SynthID/src/extraction/robust_extractor.py \
+  extract test-synthID/corpus/ \
+  --output reverse-SynthID/artifacts/codebook/corpus_codebook.pkl
+
+# Quick test (2 images x 2 strengths)
+python scripts/attack_synthid_sweep.py \
+  --max-images 2 --strengths 0.10 0.30
+
+# Full sweep (50 images x 6 strengths = 300 attacks)
+python scripts/attack_synthid_sweep.py
+
+# Results: test-synthID/results/synthid_sweep.csv
+# Attacked images: test-synthID/attacked/s{strength}/
+\end{verbatim}
+
+Hardware: Apple M-series (MPS), $\sim$\!14 minutes for 30 VideoSeal runs;
+$\sim$\!30~s per SynthID attack (4 tiles $\times$ 50 DDIM steps),
+$\sim$\!5 hours estimated for the full 300-run sweep.
+Software: PyTorch 2.1+, diffusers, VideoSeal, reverse-SynthID, OpenCV.
+
+%----------------------------------------------------------------------
+\begin{thebibliography}{9}
+
+\bibitem{videoseal}
+P.~Fernandez, et~al.,
+``VideoSeal: Open and Efficient Video Watermarking,''
+\textit{arXiv:2412.09492}, 2024.
+
+\bibitem{synthid}
+P.~Fernandez, et~al.,
+``SynthID: Robust Watermarking for Generative AI,''
+Google DeepMind, 2023.
+
+\bibitem{diffusiondb}
+Z.~J.~Wang, et~al.,
+``DiffusionDB: A Large-scale Prompt Gallery Dataset for Text-to-Image
+Generative Models,''
+\textit{arXiv:2210.14896}, 2022.
+
+\bibitem{sd15}
+R.~Rombach, et~al.,
+``High-Resolution Image Synthesis with Latent Diffusion Models,''
+\textit{CVPR}, 2022.
+
+\bibitem{gemini}
+Google DeepMind,
+``Gemini: A Family of Highly Capable Multimodal Models,''
+\textit{arXiv:2312.11805}, 2023.
+
+\bibitem{reversesynthid}
+A.~Denny,
+``reverse-SynthID: Open-source SynthID watermark detection,''
+\url{https://github.com/aloshdenny/reverse-SynthID}, 2025.
+
+\end{thebibliography}
+
+\end{document}

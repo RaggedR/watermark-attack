@@ -19,18 +19,22 @@ os.environ["PYTORCH_ENABLE_MPS_FALLBACK"] = "1"
 
 # MPS for UNet/VAE; FFT falls back to CPU automatically
 DEVICE = "mps" if torch.backends.mps.is_available() else "cpu"
-DTYPE = torch.float32  # MPS needs float32 for stability
+DTYPE = torch.float32  # float16 causes NaN in VAE on MPS; float32 is fast enough with SD 1.5
 
 
 def load_pipeline(
-    model_id: str = "stabilityai/stable-diffusion-2-1",
+    model_id: str = "stable-diffusion-v1-5/stable-diffusion-v1-5",
     cache_dir: str | None = None,
+    low_memory: bool = False,
 ) -> StableDiffusionPipeline:
     """Load SD pipeline with DDIM scheduler configured for inversion.
 
     Args:
-        model_id: HuggingFace model ID.
+        model_id: HuggingFace model ID. Default is SD 1.5 (512x512, fast on MPS).
+            For SD 2.1 (768x768), use "sd2-community/stable-diffusion-2-1".
         cache_dir: Where to cache model weights. Defaults to DW_MODEL_DIR env var.
+        low_memory: If True, load UNet and text encoder in float16 (saves ~2 GB)
+            while keeping VAE in float32 (float16 VAE causes NaN on MPS).
 
     Returns:
         StableDiffusionPipeline ready for generation and inversion.
@@ -41,15 +45,23 @@ def load_pipeline(
             os.path.join(os.path.dirname(__file__), "..", ".models"),
         )
 
+    load_dtype = torch.float16 if low_memory else DTYPE
+
     pipe = StableDiffusionPipeline.from_pretrained(
         model_id,
-        torch_dtype=DTYPE,
+        torch_dtype=load_dtype,
         cache_dir=cache_dir,
         safety_checker=None,
         requires_safety_checker=False,
     )
+
+    if low_memory:
+        # Keep VAE in float32 to avoid NaN on MPS decoder
+        pipe.vae = pipe.vae.to(dtype=torch.float32)
+
     pipe.scheduler = DDIMScheduler.from_config(pipe.scheduler.config)
     pipe = pipe.to(DEVICE)
+    pipe.enable_attention_slicing()
     return pipe
 
 
